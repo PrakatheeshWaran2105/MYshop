@@ -6,12 +6,8 @@ function e(?string $value): string
     return htmlspecialchars($value ?? '', ENT_QUOTES, 'UTF-8');
 }
 
-function url(string $path = ''): string
+function url(?string $path = ''): string
 {
-<<<<<<< HEAD
-    $base = rtrim($_ENV['APP_URL'] ?? '/kgf-mens-wear', '/');
-    return $base . '/' . ltrim($path, '/');
-=======
     $cleanPath = ltrim($path ?? '', '/');
     $envUrl = $_ENV['APP_URL'] ?? getenv('APP_URL') ?: null;
     $httpHost = $_SERVER['HTTP_HOST'] ?? '';
@@ -31,7 +27,6 @@ function url(string $path = ''): string
     $base = ($dir === '/' || $dir === '.') ? '' : rtrim($dir, '/');
 
     return $base !== '' ? $base . '/' . $cleanPath : '/' . $cleanPath;
->>>>>>> f18100a (Fix PHPMailer class autoloading and asset URL resolution for CSS)
 }
 
 function redirect(string $path): never
