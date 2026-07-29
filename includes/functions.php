@@ -8,8 +8,30 @@ function e(?string $value): string
 
 function url(string $path = ''): string
 {
+<<<<<<< HEAD
     $base = rtrim($_ENV['APP_URL'] ?? '/kgf-mens-wear', '/');
     return $base . '/' . ltrim($path, '/');
+=======
+    $cleanPath = ltrim($path ?? '', '/');
+    $envUrl = $_ENV['APP_URL'] ?? getenv('APP_URL') ?: null;
+    $httpHost = $_SERVER['HTTP_HOST'] ?? '';
+
+    if (is_string($envUrl) && $envUrl !== '') {
+        $isLocalEnv = str_contains($envUrl, 'localhost') || str_contains($envUrl, '127.0.0.1');
+        $isRemoteRequest = !empty($httpHost) && !str_contains($httpHost, 'localhost') && !str_contains($httpHost, '127.0.0.1');
+
+        if (!($isLocalEnv && $isRemoteRequest)) {
+            $base = rtrim($envUrl, '/');
+            return $base !== '' ? $base . '/' . $cleanPath : '/' . $cleanPath;
+        }
+    }
+
+    $scriptName = $_SERVER['SCRIPT_NAME'] ?? '';
+    $dir = str_replace('\\', '/', dirname($scriptName));
+    $base = ($dir === '/' || $dir === '.') ? '' : rtrim($dir, '/');
+
+    return $base !== '' ? $base . '/' . $cleanPath : '/' . $cleanPath;
+>>>>>>> f18100a (Fix PHPMailer class autoloading and asset URL resolution for CSS)
 }
 
 function redirect(string $path): never
