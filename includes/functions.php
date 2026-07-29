@@ -1,27 +1,15 @@
 <?php
 declare(strict_types=1);
 
-use PHPMailer\PHPMailer\PHPMailer;
-use PHPMailer\PHPMailer\SMTP;
-use PHPMailer\PHPMailer\Exception;
-
 function e(?string $value): string
 {
     return htmlspecialchars($value ?? '', ENT_QUOTES, 'UTF-8');
 }
 
-function url(?string $path = ''): string
+function url(string $path = ''): string
 {
-    $envUrl = $_ENV['APP_URL'] ?? getenv('APP_URL') ?: null;
-    if (is_string($envUrl) && $envUrl !== '') {
-        $base = rtrim($envUrl, '/');
-    } else {
-        $scriptName = $_SERVER['SCRIPT_NAME'] ?? '';
-        $dir = str_replace('\\', '/', dirname($scriptName));
-        $base = ($dir === '/' || $dir === '.') ? '' : $dir;
-    }
-    $cleanPath = ltrim($path ?? '', '/');
-    return $base !== '' ? $base . '/' . $cleanPath : '/' . $cleanPath;
+    $base = rtrim($_ENV['APP_URL'] ?? '/kgf-mens-wear', '/');
+    return $base . '/' . ltrim($path, '/');
 }
 
 function redirect(string $path): never
@@ -238,6 +226,10 @@ function enrichProductData(array $product): array
     ]);
 }
 
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\SMTP;
+use PHPMailer\PHPMailer\Exception;
+
 /**
  * Send an email using PHPMailer
  *
@@ -257,28 +249,75 @@ function sendMail(
     string $replyToName = '',
     ?string &$errorMessage = null
 ): bool {
-    if (!class_exists(PHPMailer::class)) {
+    // 1. Ensure PHPMailer class is available
+    if (!class_exists(\PHPMailer\PHPMailer\PHPMailer::class) && !class_exists('PHPMailer')) {
+        $rootDir = defined('ROOT_PATH') ? ROOT_PATH : dirname(__DIR__);
+        $srcDirs = [
+            $rootDir . '/vendor/phpmailer/phpmailer/src',
+            dirname(__DIR__) . '/vendor/phpmailer/phpmailer/src',
+            ($_SERVER['DOCUMENT_ROOT'] ?? '') . '/vendor/phpmailer/phpmailer/src',
+        ];
+
+        foreach ($srcDirs as $srcDir) {
+            if (!empty($srcDir) && file_exists($srcDir . '/PHPMailer.php')) {
+                if (file_exists($srcDir . '/Exception.php')) require_once $srcDir . '/Exception.php';
+                require_once $srcDir . '/PHPMailer.php';
+                if (file_exists($srcDir . '/SMTP.php')) require_once $srcDir . '/SMTP.php';
+                break;
+            }
+        }
+
+        if (!class_exists(\PHPMailer\PHPMailer\PHPMailer::class) && !class_exists('PHPMailer')) {
+            $legacyFiles = [
+                'C:/xampp/htdocs/PHPmailer/class.phpmailer.php',
+                'C:/xampp/htdocs/PHPMailer-5.2-stable/PHPMailerAutoload.php',
+            ];
+            foreach ($legacyFiles as $lfile) {
+                if (file_exists($lfile)) {
+                    require_once $lfile;
+                    break;
+                }
+            }
+        }
+    }
+
+    $isNamespaced = class_exists(\PHPMailer\PHPMailer\PHPMailer::class);
+    $isGlobal = class_exists('PHPMailer');
+
+    if (!$isNamespaced && !$isGlobal) {
         $errorMessage = 'PHPMailer class is not loaded.';
         return false;
     }
 
-    $mail = new PHPMailer(true);
+    $mail = $isNamespaced ? new \PHPMailer\PHPMailer\PHPMailer(true) : new \PHPMailer(true);
 
     try {
-        $host = $_ENV['MAIL_HOST'] ?? 'smtp.gmail.com';
+        $host = getenv('MAIL_HOST') ?: ($_ENV['MAIL_HOST'] ?? 'smtp.gmail.com');
         if (empty($host) || str_contains($host, '@')) {
             $host = 'smtp.gmail.com';
         }
 
-        $port = (int)($_ENV['MAIL_PORT'] ?? 587);
-        $username = $_ENV['MAIL_USERNAME'] ?? '';
-        $password = $_ENV['MAIL_PASSWORD'] ?? '';
-        $encryption = strtolower($_ENV['MAIL_ENCRYPTION'] ?? 'tls');
+        $port = (int)(getenv('MAIL_PORT') ?: ($_ENV['MAIL_PORT'] ?? 587));
+        $username = getenv('MAIL_USERNAME') ?: ($_ENV['MAIL_USERNAME'] ?? '');
+        $password = getenv('MAIL_PASSWORD') ?: ($_ENV['MAIL_PASSWORD'] ?? '');
+        $encryption = strtolower(getenv('MAIL_ENCRYPTION') ?: ($_ENV['MAIL_ENCRYPTION'] ?? 'tls'));
         $fromAddress = !empty($_ENV['MAIL_FROM_ADDRESS']) ? $_ENV['MAIL_FROM_ADDRESS'] : ($username ?: 'noreply@kgfmenswear.com');
         $fromName = !empty($_ENV['MAIL_FROM_NAME']) ? $_ENV['MAIL_FROM_NAME'] : 'KGF Mens Wear';
 
         if (empty($password) && str_contains($host, 'gmail.com')) {
-            $errorMessage = 'Gmail SMTP password is missing. Please set your 16-character App Password in MAIL_PASSWORD in your .env file.';
+            // Attempt PHP native mail fallback if enabled
+            if (function_exists('mail')) {
+                $headers = "MIME-Version: 1.0\r\n";
+                $headers .= "Content-type:text/html;charset=UTF-8\r\n";
+                $headers .= "From: {$fromName} <{$fromAddress}>\r\n";
+                if (!empty($replyToEmail) && filter_var($replyToEmail, FILTER_VALIDATE_EMAIL)) {
+                    $headers .= "Reply-To: {$replyToName} <{$replyToEmail}>\r\n";
+                }
+                if (@mail($to, $subject, $htmlBody, $headers)) {
+                    return true;
+                }
+            }
+            $errorMessage = 'Gmail SMTP password is missing. Please configure MAIL_PASSWORD (16-character App Password) in your environment/.env file.';
             return false;
         }
 
@@ -292,7 +331,9 @@ function sendMail(
                 $mail->SMTPAuth   = true;
                 $mail->Username   = $username;
                 $mail->Password   = $password;
-                $mail->SMTPSecure = ($encryption === 'ssl' || $port === 465) ? PHPMailer::ENCRYPTION_SMTPS : PHPMailer::ENCRYPTION_STARTTLS;
+                $encryptionConst  = $isNamespaced ? \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_SMTPS : 'ssl';
+                $startTlsConst   = $isNamespaced ? \PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS : 'tls';
+                $mail->SMTPSecure = ($encryption === 'ssl' || $port === 465) ? $encryptionConst : $startTlsConst;
                 $mail->SMTPOptions = [
                     'ssl' => [
                         'verify_peer' => false,
@@ -307,9 +348,10 @@ function sendMail(
             $mail->isMAIL();
         }
 
-
         // Disable verbose debug output
-        $mail->SMTPDebug = SMTP::DEBUG_OFF;
+        if ($isNamespaced && class_exists(\PHPMailer\PHPMailer\SMTP::class)) {
+            $mail->SMTPDebug = \PHPMailer\PHPMailer\SMTP::DEBUG_OFF;
+        }
 
         // Set From & Recipient
         $mail->setFrom($fromAddress, $fromName);
@@ -329,13 +371,9 @@ function sendMail(
 
         $mail->send();
         return true;
-    } catch (Exception $e) {
-        $errorMessage = $mail->ErrorInfo ?: $e->getMessage();
-        error_log("PHPMailer Error: " . $errorMessage);
-        return false;
     } catch (\Throwable $e) {
-        $errorMessage = $e->getMessage();
-        error_log("PHPMailer Exception: " . $errorMessage);
+        $errorMessage = isset($mail->ErrorInfo) && !empty($mail->ErrorInfo) ? $mail->ErrorInfo : $e->getMessage();
+        error_log("PHPMailer Error: " . $errorMessage);
         return false;
     }
 }
@@ -378,73 +416,20 @@ if (!function_exists('createRazorpayOrder')) {
         }
 
         try {
-            $payload = json_encode([
-                'amount'   => (int)round($amount * 100),
-                'currency' => 'INR',
-                'receipt'  => $receiptId,
-                'notes'    => $notes
+            $client = new \GuzzleHttp\Client(['verify' => false]);
+            $response = $client->post('https://api.razorpay.com/v1/orders', [
+                'auth' => [$keyId, $keySecret],
+                'headers' => ['Content-Type' => 'application/json'],
+                'json' => [
+                    'amount'   => (int)round($amount * 100),
+                    'currency' => 'INR',
+                    'receipt'  => $receiptId,
+                    'notes'    => $notes
+                ],
+                'timeout' => 10
             ]);
 
-            if (function_exists('curl_init')) {
-                $ch = curl_init('https://api.razorpay.com/v1/orders');
-                curl_setopt_array($ch, [
-                    CURLOPT_RETURNTRANSFER => true,
-                    CURLOPT_POST           => true,
-                    CURLOPT_USERPWD        => $keyId . ':' . $keySecret,
-                    CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-                    CURLOPT_POSTFIELDS     => $payload,
-                    CURLOPT_TIMEOUT        => 10,
-                    CURLOPT_SSL_VERIFYPEER => false,
-                ]);
-                $responseBody = curl_exec($ch);
-                $curlErr = curl_error($ch);
-                curl_close($ch);
-
-                if ($curlErr) {
-                    throw new \Exception("cURL Error: " . $curlErr);
-                }
-            } elseif (class_exists('\GuzzleHttp\Client')) {
-                $client = new \GuzzleHttp\Client(['verify' => false]);
-                $response = $client->post('https://api.razorpay.com/v1/orders', [
-                    'auth' => [$keyId, $keySecret],
-                    'headers' => ['Content-Type' => 'application/json'],
-                    'json' => [
-                        'amount'   => (int)round($amount * 100),
-                        'currency' => 'INR',
-                        'receipt'  => $receiptId,
-                        'notes'    => $notes
-                    ],
-                    'timeout' => 10
-                ]);
-                $responseBody = (string)$response->getBody();
-            } else {
-                $opts = [
-                    'http' => [
-                        'method'  => 'POST',
-                        'header'  => "Content-Type: application/json\r\n" .
-                                     "Authorization: Basic " . base64_encode($keyId . ':' . $keySecret) . "\r\n",
-                        'content' => $payload,
-                        'timeout' => 10,
-                        'ignore_errors' => true,
-                    ],
-                    'ssl' => [
-                        'verify_peer' => false,
-                        'verify_peer_name' => false,
-                    ]
-                ];
-                $context  = stream_context_create($opts);
-                $responseBody = @file_get_contents('https://api.razorpay.com/v1/orders', false, $context);
-                if ($responseBody === false) {
-                    throw new \Exception("Failed to connect to Razorpay API.");
-                }
-            }
-
-            $data = json_decode((string)$responseBody, true);
-            if (isset($data['error'])) {
-                $errDesc = $data['error']['description'] ?? json_encode($data['error']);
-                throw new \Exception("Razorpay API Error: " . $errDesc);
-            }
-
+            $data = json_decode((string)$response->getBody(), true);
             return [
                 'success'  => true,
                 'is_test'  => false,
